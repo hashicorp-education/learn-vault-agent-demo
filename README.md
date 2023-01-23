@@ -1,16 +1,16 @@
 # Vault Agent with AWS
 
-These assets are provided to provision AWS resources to perform the steps described in the [Vault Agent with AWS](https://learn.hashicorp.com/vault/identity-access-management/vault-agent-aws) guide.
+You can use these assets to provision AWS resources to perform the steps described in the [Vault Agent with AWS](https://learn.hashicorp.com/vault/identity-access-management/vault-agent-aws) guide.
 
 ---
 
-**NOTE:** The example Terraform in this repository is created for the demo purpose, and not suitable for production use. For production deployment, refer the following examples:
+**NOTE:** The example Terraform code in this repository is for demonstration purposes, and is not suitable for production use. For production deployment, refer the following examples:
 
 - [operations/provision-vault](https://github.com/hashicorp/vault-guides/tree/master/operations/provision-vault)
 - [Terraform Module Registry](https://registry.terraform.io/modules/hashicorp/vault/aws/0.10.3)
 
 
-## Demo Steps
+## Demo steps
 
 1. Set this location as your working directory
 
@@ -107,7 +107,7 @@ These assets are provided to provision AWS resources to perform the steps descri
             $VAULT_ADDR/v1/secret/myapp/config | jq
     ```
 
-1. To demonstrate the Auto-Auth with response-wrapped token, execute the following command on the **client**.
+1. Try the Auto-Auth with response-wrapped token by executing the following command on the **client**.
 
     ```shell
     # Add 'wrap_ttl' in the sink block
