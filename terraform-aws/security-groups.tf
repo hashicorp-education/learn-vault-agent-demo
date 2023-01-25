@@ -1,5 +1,5 @@
-resource "aws_security_group" "testing" {
-  name        = "${var.environment_name}-testing-sg"
+resource "aws_security_group" "learn-vault-agent" {
+  name        = "${var.environment_name}-learn-vault-agent-sg"
   description = "SSH and Internal Traffic"
   vpc_id      = module.vault_demo_vpc.vpc_id
 
@@ -27,14 +27,6 @@ resource "aws_security_group" "testing" {
   ingress {
     from_port   = 8201
     to_port     = 8201
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # Consul UI
-  ingress {
-    from_port   = 8500
-    to_port     = 8500
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }

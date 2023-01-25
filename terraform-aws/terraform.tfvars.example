@@ -18,7 +18,7 @@ aws_region = "us-east-1"
 availability_zones = "us-east-1a"
 
 # Instance size (default is t2.micro)
-instance_type = "m5.large"
+instance_type = "t2.micro"
 
 # Number of Vault servers to provision (default is 1)
 vault_server_count = 1

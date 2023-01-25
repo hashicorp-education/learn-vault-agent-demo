@@ -9,27 +9,12 @@ variable "availability_zones" {
 
 # All resources will be tagged with this
 variable "environment_name" {
-  default = "vault-agent-demo"
-}
-
-# Consul datacenter name
-variable "consul_dc" {
-  default = "dc1"
+  default = "learn-vault-agent-demo"
 }
 
 # Number of Vault servers to provision
 variable "vault_server_count" {
   default = 1
-}
-
-# URL for Vault OSS binary
-variable "vault_zip_file" {
-  default = "https://releases.hashicorp.com/vault/1.6.0/vault_1.6.0_linux_amd64.zip"
-}
-
-# URL for Consul OSS binary
-variable "consul_zip_file" {
-  default = "https://releases.hashicorp.com/consul/1.7.2/consul_1.7.2_linux_amd64.zip"
 }
 
 # Instance size

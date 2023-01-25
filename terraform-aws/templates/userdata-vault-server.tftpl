@@ -17,9 +17,6 @@ logger "Running"
 PRIVATE_IP=$(curl http://169.254.169.254/latest/meta-data/local-ipv4)
 #PUBLIC_IP=$(curl http://169.254.169.254/latest/meta-data/public-ipv4)
 
-VAULT_ZIP="${tpl_vault_zip_file}"
-CONSUL_ZIP="${tpl_consul_zip_file}"
-
 AWS_REGION="${tpl_aws_region}"
 KMS_KEY="${tpl_kms_key}"
 CONSUL_BOOSTRAP_EXPECT="${tpl_consul_bootstrap_expect}"
@@ -119,212 +116,54 @@ else
 fi
 
 ##--------------------------------------------------------------------
-## Configure Consul user
-
-USER_NAME="consul"
-USER_COMMENT="HashiCorp Consul user"
-USER_GROUP="consul"
-USER_HOME="/srv/consul"
-
-if [[ ! -z $${YUM} ]]; then
-  logger "Setting up user $${USER_NAME} for RHEL/CentOS"
-  user_rhel
-elif [[ ! -z $${APT_GET} ]]; then
-  logger "Setting up user $${USER_NAME} for Debian/Ubuntu"
-  user_ubuntu
-else
-  logger "$${USER_NAME} user not created due to OS detection failure"
-  exit 1;
-fi
-
-##--------------------------------------------------------------------
-## Install Consul
-
-logger "Downloading Consul"
-curl -o /tmp/consul.zip $${CONSUL_ZIP}
-
-logger "Installing Consul"
-sudo unzip -o /tmp/consul.zip -d /usr/local/bin/
-sudo chmod 0755 /usr/local/bin/consul
-sudo chown consul:consul /usr/local/bin/consul
-# Config dir
-sudo mkdir -pm 0755 /etc/consul.d
-# Storage dir
-sudo mkdir -pm 0755 /opt/consul
-# SSL dir (optional)
-sudo mkdir -pm 0755 /etc/ssl/consul
-
-logger "/usr/local/bin/consul --version: $(/usr/local/bin/consul --version)"
-
-logger "Configuring Consul"
-
-# Consul Client Config
-sudo tee /etc/consul.d/consul-default.json <<EOF
-{
-  "datacenter": "${tpl_consul_dc}",
-  "data_dir": "/opt/consul/data",
-  "bind_addr": "$${PRIVATE_IP}",
-  "client_addr": "0.0.0.0",
-  "log_level": "INFO",
-  "ui": true,
-  "retry_join": ["provider=aws tag_key=ConsulDC tag_value=${tpl_consul_dc}"]
-}
-EOF
-
-# Consul Server Config
-sudo tee /etc/consul.d/consul-server.json <<EOF
-{
-  "server": true,
-  "bootstrap_expect": $${CONSUL_BOOSTRAP_EXPECT}
-}
-EOF
-
-sudo chown -R consul:consul /etc/consul.d /opt/consul /etc/ssl/consul
-sudo chmod -R 0644 /etc/consul.d/*
-
-##--------------------------------------------------------------------
-## Create Consul Systemd Service
-
-# Service Definition
-read -d '' CONSUL_SERVICE <<EOF
-[Unit]
-Description=Consul Agent
-
-[Service]
-Restart=on-failure
-ExecStart=/usr/local/bin/consul agent -config-dir /etc/consul.d
-ExecReload=/bin/kill -HUP $MAINPID
-KillSignal=SIGTERM
-User=consul
-Group=consul
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-if [[ ! -z $${YUM} ]]; then
-  SYSTEMD_DIR="/etc/systemd/system"
-  logger "Installing systemd services for RHEL/CentOS"
-  echo "$${CONSUL_SERVICE}" | sudo tee $${SYSTEMD_DIR}/consul.service
-  sudo chmod 0664 $${SYSTEMD_DIR}/consul*
-elif [[ ! -z $${APT_GET} ]]; then
-  SYSTEMD_DIR="/lib/systemd/system"
-  logger "Installing systemd services for Debian/Ubuntu"
-  echo "$${CONSUL_SERVICE}" | sudo tee $${SYSTEMD_DIR}/consul.service
-  sudo chmod 0664 $${SYSTEMD_DIR}/consul*
-else
-  logger "Service not installed due to OS detection failure"
-  exit 1;
-fi
-
-sudo systemctl enable consul
-sudo systemctl start consul
-
-##--------------------------------------------------------------------
-## Configure DNS Forwarding for Consul
-## (https://www.consul.io/docs/guides/forwarding.html#dnsmasq-setup)
-
-install_dnsmasq_rhel() {
-  logger "Installing dnsmasq"
-  sudo yum install -q -y dnsmasq
-
-  configure_dnsmasq
-}
-
-install_dnsmasq_ubuntu() {
-  logger "Installing dnsmasq"
-  sudo apt-get -qq update
-  sudo apt-get install -qq -y dnsmasq-base dnsmasq
-
-  configure_dnsmasq
-}
-
-configure_dnsmasq() {
-  logger "Configuring dnsmasq to forward .consul requests to consul port 8600"
-  sudo sh -c 'echo "server=/consul/127.0.0.1#8600" >> /etc/dnsmasq.d/consul'
-
-  sudo systemctl restart dnsmasq
-}
-
-configure_systemd_resolved() {
-  # See: https://www.consul.io/docs/guides/forwarding.html#systemd-resolved-setup
-  echo "DNS=127.0.0.1" | sudo tee -a /etc/systemd/resolved.conf
-  echo "Domains=~consul" | sudo tee -a /etc/systemd/resolved.conf
-
-  # We need to create and persist iptable rules to map port 53 to 8600
-  # since Consul (by default) serves DNS on port 8600 and we're avoiding
-  # running Consul as a privileged user
-  sudo iptables -t nat -A OUTPUT -d localhost -p udp -m udp --dport 53 -j REDIRECT --to-ports 8600
-  sudo iptables -t nat -A OUTPUT -d localhost -p tcp -m tcp --dport 53 -j REDIRECT --to-ports 8600
-
-  # Save these iptables rules and persist them
-  # Unattended install of iptables-persistent
-  echo iptables-persistent iptables-persistent/autosave_v4 boolean true | sudo debconf-set-selections
-  echo iptables-persistent iptables-persistent/autosave_v6 boolean true | sudo debconf-set-selections
-  sudo apt-get install iptables-persistent
-
-  sudo systemctl restart systemd-resolved
-}
-
-# Tested on Ubuntu 16.04 and 18.04 so far
-if [[ ! -z $(which yum) ]]; then
-  # RHEL
-  install_dnsmasq_rhel
-elif [[ ! -z $(which apt-get) ]]; then
-  # Ubuntu
-  if [[ $(lsb_release -rs) == 16.04 ]]; then
-    install_dnsmasq_ubuntu
-  # Ubuntu 18.04 uses systemd-resolved as the default DNS resolver
-  elif [[ $(lsb_release -rs) == 18.04 ]]; then
-    configure_systemd_resolved
-  else
-    logger "ERROR configuring DNS forwarding for Consul: unsupported Ubuntu version found"
-    exit 1;
-  fi
-else
-  logger "ERROR configuring DNS forwarding for Consul: OS detection failure"
-  exit 1;
-fi
-
-##--------------------------------------------------------------------
-## Configure Vault user
-
-USER_NAME="vault"
-USER_COMMENT="HashiCorp Vault user"
-USER_GROUP="vault"
-USER_HOME="/srv/vault"
-
-if [[ ! -z $${YUM} ]]; then
-  logger "Setting up user $${USER_NAME} for RHEL/CentOS"
-  user_rhel
-elif [[ ! -z $${APT_GET} ]]; then
-  logger "Setting up user $${USER_NAME} for Debian/Ubuntu"
-  user_ubuntu
-else
-  logger "$${USER_NAME} user not created due to OS detection failure"
-  exit 1;
-fi
-
-##--------------------------------------------------------------------
 ## Install Vault
 
-logger "Downloading Vault"
-curl -o /tmp/vault.zip $${VAULT_ZIP}
+if [[ ! -z $${YUM} ]]; then
+  logger "RHEL/CentOS system detected"
+  logger "Performing updates and installing prerequisites"
+  curl --silent -O https://bootstrap.pypa.io/get-pip.py
+  sudo python get-pip.py
+  sudo pip install awscli
+  logger "Installing Vault"
+  sudo yum install -y yum-utils
+  sudo yum-config-manager --add-repo https://rpm.releases.hashicorp.com/RHEL/hashicorp.repo
+  sudo yum -y install vault
+  
 
-logger "Installing Vault"
-sudo unzip -o /tmp/vault.zip -d /usr/local/bin/
-sudo chmod 0755 /usr/local/bin/vault
-sudo chown vault:vault /usr/local/bin/vault
-sudo mkdir -pm 0755 /etc/vault.d
-sudo mkdir -pm 0755 /etc/ssl/vault
+elif [[ ! -z $${APT_GET} ]]; then
+  logger "Debian/Ubuntu system detected"
+  logger "Performing updates and installing prerequisites"
+  sudo apt-get -qq -y update
+  sudo apt-get install -qq -y awscli
+  logger "Installing Vault"
+  wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor | sudo tee /usr/share/keyrings/hashicorp-archive-keyring.gpg
+  echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+  sudo apt update && sudo apt install vault
+
+else
+  logger "Vault not installed due to OS detection failure"
+  exit 1;
+fi
+
+##--------------------------------------------------------------------
+## Configure Vault server
 
 logger "/usr/local/bin/vault --version: $(/usr/local/bin/vault --version)"
 
 logger "Configuring Vault"
+
+sudo cp /etc/vault.d/vault.hcl /etc/vault.d/vault.hcl.orig
+
+# Overwrite default configuration with custom configuration
 sudo tee /etc/vault.d/vault.hcl <<EOF
-storage "consul" {
+api_addr = "http://$${PRIVATE_IP}:8200"
+cluster_addr = "http://$${PRIVATE_IP}:8201"
+ui=true
+
+storage "raft" {
     service = "${tpl_vault_service_name}"
-    path = "${tpl_vault_service_name}"
+    node_id = "learn-vault-server-1"
+    path = "/opt/vault/data"
 }
 
 listener "tcp" {
@@ -333,20 +172,17 @@ listener "tcp" {
   tls_disable = 1
 }
 
-#api_addr = "http://active.${tpl_vault_service_name}.service.${tpl_consul_dc}.consul:8200"
-#cluster_addr = "https://active.${tpl_vault_service_name}.service.${tpl_consul_dc}.consul:8201"
-
 seal "awskms" {
   region = "$${AWS_REGION}"
   kms_key_id = "$${KMS_KEY}"
 }
 
-ui=true
 EOF
 
-sudo chown -R vault:vault /etc/vault.d /etc/ssl/vault
 sudo chmod -R 0644 /etc/vault.d/*
 
+##--------------------------------------------------------------------
+## Global Vault default client configuration
 sudo tee -a /etc/environment <<EOF
 export VAULT_ADDR=http://$${PRIVATE_IP}:8200
 export VAULT_SKIP_VERIFY=true
@@ -354,48 +190,13 @@ EOF
 
 source /etc/environment
 
+##--------------------------------------------------------------------
+## Ensure mlock capability on binary
 logger "Granting mlock syscall to vault binary"
-sudo setcap cap_ipc_lock=+ep /usr/local/bin/vault
+sudo setcap cap_ipc_lock=+ep /usr/bin/vault
 
 ##--------------------------------------------------------------------
-## Install Vault Systemd Service
-
-read -d '' VAULT_SERVICE <<EOF
-[Unit]
-Description=Vault Agent
-Requires=network-online.target
-After=network-online.target
-
-[Service]
-Restart=on-failure
-PermissionsStartOnly=true
-ExecStartPre=/sbin/setcap 'cap_ipc_lock=+ep' /usr/local/bin/vault
-ExecStart=/usr/local/bin/vault server -config /etc/vault.d
-ExecReload=/bin/kill -HUP $MAINPID
-KillSignal=SIGTERM
-User=vault
-Group=vault
-
-[Install]
-WantedBy=multi-user.target
-
-EOF
-
-if [[ ! -z $${YUM} ]]; then
-  SYSTEMD_DIR="/etc/systemd/system"
-  logger "Installing systemd services for RHEL/CentOS"
-  echo "$${VAULT_SERVICE}" | sudo tee $${SYSTEMD_DIR}/vault.service
-  sudo chmod 0664 $${SYSTEMD_DIR}/vault*
-elif [[ ! -z $${APT_GET} ]]; then
-  SYSTEMD_DIR="/lib/systemd/system"
-  logger "Installing systemd services for Debian/Ubuntu"
-  echo "$${VAULT_SERVICE}" | sudo tee $${SYSTEMD_DIR}/vault.service
-  sudo chmod 0664 $${SYSTEMD_DIR}/vault*
-else
-  logger "Service not installed due to OS detection failure"
-  exit 1;
-fi
-
+## Enable and start Vault
 sudo systemctl enable vault
 sudo systemctl start vault
 
